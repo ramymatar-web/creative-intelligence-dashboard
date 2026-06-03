@@ -11,6 +11,7 @@ st.set_page_config(
 ACCESS_TOKEN = st.secrets["META_ACCESS_TOKEN"]
 AD_ACCOUNT_ID = st.secrets["AD_ACCOUNT_ID"]
 
+
 def extract_leads(actions):
     leads = 0
     for action in actions or []:
@@ -19,7 +20,8 @@ def extract_leads(actions):
             leads += int(action.get("value", 0))
     return leads
 
-def get_insights(start_date, end_date):
+
+def get_performance(start_date, end_date):
     url = f"https://graph.facebook.com/v25.0/act_{AD_ACCOUNT_ID}/insights"
     params = {
         "level": "ad",
@@ -37,6 +39,7 @@ def get_insights(start_date, end_date):
         return pd.DataFrame()
 
     rows = []
+
     for item in data.get("data", []):
         spend = float(item.get("spend", 0))
         leads = extract_leads(item.get("actions", []))
@@ -66,24 +69,60 @@ def get_insights(start_date, end_date):
 
     return pd.DataFrame(rows)
 
+
+def get_creatives():
+    url = f"https://graph.facebook.com/v25.0/act_{AD_ACCOUNT_ID}/ads"
+    params = {
+        "fields": "id,name,creative{id,name,thumbnail_url,image_url,object_story_spec}",
+        "limit": 100,
+        "access_token": ACCESS_TOKEN
+    }
+
+    response = requests.get(url, params=params)
+    data = response.json()
+
+    if "error" in data:
+        st.error(data["error"]["message"])
+        return pd.DataFrame()
+
+    rows = []
+
+    for item in data.get("data", []):
+        creative = item.get("creative", {})
+
+        rows.append({
+            "Ad ID": item.get("id"),
+            "Creative ID": creative.get("id", ""),
+            "Creative Name": creative.get("name", ""),
+            "Thumbnail URL": creative.get("thumbnail_url", ""),
+            "Image URL": creative.get("image_url", "")
+        })
+
+    return pd.DataFrame(rows)
+
+
 st.title("🚀 Creative Intelligence Dashboard")
 st.caption("Meta Ads Creative Performance Intelligence")
 
 with st.sidebar:
     st.header("Filters")
+
     today = date.today()
     default_start = today - timedelta(days=30)
 
     start_date = st.date_input("Start Date", default_start)
     end_date = st.date_input("End Date", today)
 
-    st.info("Rules: Winner = Leads ≥ 100 and CPL ≤ 20 EGP")
+    st.info("Winner = Leads ≥ 100 and CPL ≤ 20 EGP")
 
-df = get_insights(start_date, end_date)
+performance_df = get_performance(start_date, end_date)
+creative_df = get_creatives()
 
-if df.empty:
-    st.warning("No data returned from Meta API.")
+if performance_df.empty:
+    st.warning("No performance data returned from Meta API.")
 else:
+    df = performance_df.merge(creative_df, on="Ad ID", how="left")
+
     total_spend = df["Spend"].sum()
     total_leads = df["Leads"].sum()
     avg_cpl = total_spend / total_leads if total_leads > 0 else 0
@@ -97,13 +136,54 @@ else:
     col4.metric("Avg CTR", f"{avg_ctr:.2f}%")
     col5.metric("Avg CPC", f"{avg_cpc:.2f} EGP")
 
-    st.subheader("🏆 Winners")
+    st.subheader("🏆 Winner Creatives")
+
     winners = df[df["Status"] == "🟢 Winner"].sort_values("CPL")
-    st.dataframe(winners, use_container_width=True)
+
+    for _, row in winners.head(10).iterrows():
+        col_img, col_data = st.columns([1, 3])
+
+        with col_img:
+            img = row.get("Thumbnail URL") or row.get("Image URL")
+            if img:
+                st.image(img, use_container_width=True)
+            else:
+                st.write("No Preview")
+
+        with col_data:
+            st.markdown(f"### {row['Ad Name']}")
+            st.write(f"**Creative Name:** {row.get('Creative Name', '')}")
+            st.write(f"**Spend:** {row['Spend']:,.2f} EGP")
+            st.write(f"**Leads:** {row['Leads']:,}")
+            st.write(f"**CPL:** {row['CPL']:.2f} EGP")
+            st.write(f"**CTR:** {row['CTR']:.2f}%")
+            st.write(f"**CPC:** {row['CPC']:.2f} EGP")
+            st.write(f"**Status:** {row['Status']}")
+
+        st.divider()
 
     st.subheader("📊 All Ads Performance")
-    df = df.sort_values(["Status", "CPL"], ascending=[True, True])
-    st.dataframe(df, use_container_width=True)
+
+    display_cols = [
+        "Ad ID",
+        "Ad Name",
+        "Creative Name",
+        "Spend",
+        "Leads",
+        "CPL",
+        "CTR",
+        "CPC",
+        "CPM",
+        "Reach",
+        "Impressions",
+        "Frequency",
+        "Status"
+    ]
+
+    st.dataframe(
+        df[display_cols].sort_values("CPL"),
+        use_container_width=True
+    )
 
     st.download_button(
         label="Download CSV",
