@@ -73,7 +73,7 @@ def get_performance(start_date, end_date):
 def get_creatives():
     url = f"https://graph.facebook.com/v25.0/act_{AD_ACCOUNT_ID}/ads"
     params = {
-        "fields": "id,name,creative{id,name,thumbnail_url,image_url,object_story_spec}",
+        "fields": "id,name,creative{id,name,thumbnail_url,image_url,video_id,object_story_spec}",
         "limit": 100,
         "access_token": ACCESS_TOKEN
     }
@@ -143,12 +143,17 @@ else:
     for _, row in winners.head(10).iterrows():
         col_img, col_data = st.columns([1, 3])
 
-        with col_img:
-            img = row.get("Thumbnail URL") or row.get("Image URL")
-            if img:
-                st.image(img, use_container_width=True)
-            else:
-                st.write("No Preview")
+      with col_img:
+    img = row.get("Thumbnail URL") or row.get("Image URL")
+
+    if img:
+        try:
+            st.image(img, use_container_width=True)
+        except Exception:
+            st.warning("Preview not available")
+            st.write(img)
+    else:
+        st.write("No Preview")
 
         with col_data:
             st.markdown(f"### {row['Ad Name']}")
