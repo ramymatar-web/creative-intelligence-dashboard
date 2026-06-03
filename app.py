@@ -21,6 +21,20 @@ def extract_leads(actions):
     return leads
 
 
+def safe_float(value):
+    try:
+        return float(value)
+    except:
+        return 0.0
+
+
+def safe_int(value):
+    try:
+        return int(value)
+    except:
+        return 0
+
+
 def get_performance(start_date, end_date):
     url = f"https://graph.facebook.com/v25.0/act_{AD_ACCOUNT_ID}/insights"
     params = {
@@ -41,7 +55,7 @@ def get_performance(start_date, end_date):
     rows = []
 
     for item in data.get("data", []):
-        spend = float(item.get("spend", 0))
+        spend = safe_float(item.get("spend", 0))
         leads = extract_leads(item.get("actions", []))
         cpl = spend / leads if leads > 0 else 0
 
@@ -58,12 +72,12 @@ def get_performance(start_date, end_date):
             "Spend": spend,
             "Leads": leads,
             "CPL": cpl,
-            "CTR": float(item.get("ctr", 0)),
-            "CPC": float(item.get("cpc", 0)),
-            "CPM": float(item.get("cpm", 0)),
-            "Reach": int(item.get("reach", 0)),
-            "Impressions": int(item.get("impressions", 0)),
-            "Frequency": float(item.get("frequency", 0)),
+            "CTR": safe_float(item.get("ctr", 0)),
+            "CPC": safe_float(item.get("cpc", 0)),
+            "CPM": safe_float(item.get("cpm", 0)),
+            "Reach": safe_int(item.get("reach", 0)),
+            "Impressions": safe_int(item.get("impressions", 0)),
+            "Frequency": safe_float(item.get("frequency", 0)),
             "Status": status
         })
 
@@ -88,17 +102,30 @@ def get_creatives():
     rows = []
 
     for item in data.get("data", []):
-        creative = item.get("creative", {})
+        creative = item.get("creative", {}) or {}
 
         rows.append({
             "Ad ID": item.get("id"),
             "Creative ID": creative.get("id", ""),
             "Creative Name": creative.get("name", ""),
             "Thumbnail URL": creative.get("thumbnail_url", ""),
-            "Image URL": creative.get("image_url", "")
+            "Image URL": creative.get("image_url", ""),
+            "Video ID": creative.get("video_id", "")
         })
 
     return pd.DataFrame(rows)
+
+
+def show_preview(url):
+    if not url or pd.isna(url):
+        st.write("No Preview")
+        return
+
+    try:
+        st.image(url, use_container_width=True)
+    except Exception:
+        st.warning("Preview not supported")
+        st.link_button("Open Preview", url)
 
 
 st.title("🚀 Creative Intelligence Dashboard")
@@ -106,7 +133,6 @@ st.caption("Meta Ads Creative Performance Intelligence")
 
 with st.sidebar:
     st.header("Filters")
-
     today = date.today()
     default_start = today - timedelta(days=30)
 
@@ -143,21 +169,15 @@ else:
     for _, row in winners.head(10).iterrows():
         col_img, col_data = st.columns([1, 3])
 
-      with col_img:
-    img = row.get("Thumbnail URL") or row.get("Image URL")
-
-    if img:
-        try:
-            st.image(img, use_container_width=True)
-        except Exception:
-            st.warning("Preview not available")
-            st.write(img)
-    else:
-        st.write("No Preview")
+        with col_img:
+            preview_url = row.get("Thumbnail URL") or row.get("Image URL")
+            show_preview(preview_url)
 
         with col_data:
             st.markdown(f"### {row['Ad Name']}")
             st.write(f"**Creative Name:** {row.get('Creative Name', '')}")
+            st.write(f"**Creative ID:** {row.get('Creative ID', '')}")
+            st.write(f"**Video ID:** {row.get('Video ID', '')}")
             st.write(f"**Spend:** {row['Spend']:,.2f} EGP")
             st.write(f"**Leads:** {row['Leads']:,}")
             st.write(f"**CPL:** {row['CPL']:.2f} EGP")
@@ -173,6 +193,8 @@ else:
         "Ad ID",
         "Ad Name",
         "Creative Name",
+        "Creative ID",
+        "Video ID",
         "Spend",
         "Leads",
         "CPL",
