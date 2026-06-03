@@ -11,6 +11,39 @@ st.set_page_config(
 ACCESS_TOKEN = st.secrets["META_ACCESS_TOKEN"]
 AD_ACCOUNT_ID = st.secrets["AD_ACCOUNT_ID"]
 
+st.markdown("""
+<style>
+.block-container {
+    padding-top: 2rem;
+}
+.kpi-card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 18px;
+    padding: 20px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+}
+.kpi-title {
+    color: #6b7280;
+    font-size: 14px;
+}
+.kpi-value {
+    color: #111827;
+    font-size: 28px;
+    font-weight: 700;
+}
+.card-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: #111827;
+}
+.small-muted {
+    color: #6b7280;
+    font-size: 13px;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 def safe_float(value):
     try:
@@ -24,6 +57,28 @@ def safe_int(value):
         return int(value)
     except:
         return 0
+
+
+def fetch_all_pages(url, params, max_pages=10):
+    all_data = []
+    page = 0
+
+    while url and page < max_pages:
+        response = requests.get(url, params=params)
+        data = response.json()
+
+        if "error" in data:
+            st.error(data["error"]["message"])
+            break
+
+        all_data.extend(data.get("data", []))
+
+        next_url = data.get("paging", {}).get("next")
+        url = next_url
+        params = None
+        page += 1
+
+    return all_data
 
 
 def extract_leads(actions):
@@ -44,7 +99,6 @@ def calculate_score(row):
 
     score = 0
 
-    # CPL score - 40 points
     if cpl > 0 and cpl <= 5:
         score += 40
     elif cpl <= 10:
@@ -54,7 +108,6 @@ def calculate_score(row):
     elif cpl <= 40:
         score += 12
 
-    # Leads volume score - 25 points
     if leads >= 1000:
         score += 25
     elif leads >= 500:
@@ -64,7 +117,6 @@ def calculate_score(row):
     elif leads >= 30:
         score += 8
 
-    # CTR score - 20 points
     if ctr >= 4:
         score += 20
     elif ctr >= 3:
@@ -74,7 +126,6 @@ def calculate_score(row):
     elif ctr >= 1:
         score += 5
 
-    # CPC score - 10 points
     if cpc > 0 and cpc <= 2:
         score += 10
     elif cpc <= 4:
@@ -82,7 +133,6 @@ def calculate_score(row):
     elif cpc <= 7:
         score += 4
 
-    # Frequency score - 5 points
     if frequency > 0 and frequency <= 2.5:
         score += 5
     elif frequency <= 4:
@@ -96,23 +146,7 @@ def classify_status(score):
         return "🟢 Winner"
     elif score >= 60:
         return "🟡 Monitor"
-    else:
-        return "🔴 Weak"
-
-
-def detect_creative_type(row):
-    video_id = str(row.get("Video ID", "") or "")
-    image_url = str(row.get("Image URL", "") or "")
-    thumbnail_url = str(row.get("Thumbnail URL", "") or "")
-
-    if video_id and video_id.lower() != "nan":
-        return "🎥 Video"
-    elif image_url and image_url.lower() != "nan":
-        return "🖼️ Image"
-    elif thumbnail_url and thumbnail_url.lower() != "nan":
-        return "🖼️ Thumbnail"
-    else:
-        return "❓ Unknown"
+    return "🔴 Weak"
 
 
 def get_performance(start_date, end_date):
@@ -125,16 +159,10 @@ def get_performance(start_date, end_date):
         "access_token": ACCESS_TOKEN
     }
 
-    response = requests.get(url, params=params)
-    data = response.json()
-
-    if "error" in data:
-        st.error(data["error"]["message"])
-        return pd.DataFrame()
-
+    data = fetch_all_pages(url, params, max_pages=20)
     rows = []
 
-    for item in data.get("data", []):
+    for item in data:
         spend = safe_float(item.get("spend", 0))
         leads = extract_leads(item.get("actions", []))
         cpl = spend / leads if leads > 0 else 0
@@ -159,88 +187,70 @@ def get_performance(start_date, end_date):
 def get_creatives():
     url = f"https://graph.facebook.com/v25.0/act_{AD_ACCOUNT_ID}/ads"
     params = {
-        "fields": "id,name,creative{id,name,thumbnail_url,image_url,video_id,object_story_spec}",
+        "fields": "id,name,creative{id,name,thumbnail_url,image_url,video_id,object_story_spec,effective_object_story_id}",
         "limit": 100,
         "access_token": ACCESS_TOKEN
     }
 
-    response = requests.get(url, params=params)
-    data = response.json()
-
-    if "error" in data:
-        st.error(data["error"]["message"])
-        return pd.DataFrame()
-
+    data = fetch_all_pages(url, params, max_pages=20)
     rows = []
 
-    for item in data.get("data", []):
+    for item in data:
         creative = item.get("creative", {}) or {}
+        thumb = creative.get("thumbnail_url", "")
+        image = creative.get("image_url", "")
+        video_id = creative.get("video_id", "")
+
+        if video_id:
+            ctype = "🎥 Video"
+        elif image:
+            ctype = "🖼️ Image"
+        elif thumb:
+            ctype = "🖼️ Thumbnail"
+        else:
+            ctype = "❓ Unknown"
 
         rows.append({
             "Ad ID": item.get("id"),
             "Creative ID": creative.get("id", ""),
             "Creative Name": creative.get("name", ""),
-            "Thumbnail URL": creative.get("thumbnail_url", ""),
-            "Image URL": creative.get("image_url", ""),
-            "Video ID": creative.get("video_id", "")
+            "Thumbnail URL": thumb,
+            "Image URL": image,
+            "Video ID": video_id,
+            "Creative Type": ctype
         })
 
     return pd.DataFrame(rows)
 
 
 def show_preview(url):
-    if not url or pd.isna(url):
+    if not url or pd.isna(url) or str(url).lower() == "nan":
         st.markdown(
-            """
-            <div style="
-                height:180px;
-                background:#f3f4f6;
-                border-radius:12px;
-                display:flex;
-                align-items:center;
-                justify-content:center;
-                color:#6b7280;
-                font-size:14px;">
-                No Preview
-            </div>
-            """,
+            "<div style='height:210px;background:#f3f4f6;border-radius:16px;display:flex;align-items:center;justify-content:center;color:#6b7280;'>No Preview</div>",
             unsafe_allow_html=True
         )
         return
 
     try:
         st.image(url, use_container_width=True)
-    except Exception:
+    except:
         st.markdown(
-            """
-            <div style="
-                height:180px;
-                background:#fff3cd;
-                border-radius:12px;
-                display:flex;
-                align-items:center;
-                justify-content:center;
-                color:#856404;
-                font-size:14px;">
-                Preview Not Supported
-            </div>
-            """,
+            "<div style='height:210px;background:#fef3c7;border-radius:16px;display:flex;align-items:center;justify-content:center;color:#92400e;'>Preview Not Supported</div>",
             unsafe_allow_html=True
         )
-        st.link_button("Open Preview", url)
 
 
-def render_creative_card(row):
+def render_card(row):
     preview_url = row.get("Thumbnail URL") or row.get("Image URL")
 
     with st.container(border=True):
         show_preview(preview_url)
 
-        st.markdown(f"### {row.get('Ad Name', 'Unnamed Ad')}")
-        st.caption(row.get("Creative Name", ""))
+        st.markdown(f"<div class='card-title'>{row.get('Ad Name', '')}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='small-muted'>{row.get('Creative Name', '')}</div>", unsafe_allow_html=True)
 
-        st.write(f"**Creative Type:** {row.get('Creative Type', 'Unknown')}")
-        st.write(f"**Winner Score:** {row.get('Winner Score', 0)}/100")
+        st.write(f"**Type:** {row.get('Creative Type', 'Unknown')}")
+        st.write(f"**Score:** {safe_int(row.get('Winner Score', 0))}/100")
         st.write(f"**Status:** {row.get('Status', '')}")
 
         c1, c2 = st.columns(2)
@@ -251,10 +261,7 @@ def render_creative_card(row):
         c3.metric("CTR", f"{safe_float(row.get('CTR', 0)):.2f}%")
         c4.metric("CPC", f"{safe_float(row.get('CPC', 0)):.2f} EGP")
 
-        st.write(f"**Spend:** {safe_float(row.get('Spend', 0)):,.2f} EGP")
-
-        if preview_url:
-            st.link_button("Open Creative Preview", preview_url)
+        st.caption(f"Spend: {safe_float(row.get('Spend', 0)):,.2f} EGP")
 
 
 st.title("🚀 Creative Intelligence Dashboard")
@@ -269,25 +276,10 @@ with st.sidebar:
     start_date = st.date_input("Start Date", default_start)
     end_date = st.date_input("End Date", today)
 
-    max_winners = st.slider(
-        "Number of Winner Creatives",
-        min_value=5,
-        max_value=100,
-        value=30,
-        step=5
-    )
+    min_score = st.slider("Minimum Winner Score", 0, 100, 80, 5)
+    max_cards = st.slider("Number of Cards", 6, 100, 30, 3)
 
-    min_score = st.slider(
-        "Minimum Winner Score",
-        min_value=0,
-        max_value=100,
-        value=80,
-        step=5
-    )
-
-    st.info(
-        "Winner Score = CPL + Leads Volume + CTR + CPC + Frequency"
-    )
+    st.info("Score = CPL + Leads Volume + CTR + CPC + Frequency")
 
 performance_df = get_performance(start_date, end_date)
 creative_df = get_creatives()
@@ -299,7 +291,6 @@ else:
 
     df["Winner Score"] = df.apply(calculate_score, axis=1)
     df["Status"] = df["Winner Score"].apply(classify_status)
-    df["Creative Type"] = df.apply(detect_creative_type, axis=1)
 
     total_spend = df["Spend"].sum()
     total_leads = df["Leads"].sum()
@@ -312,64 +303,81 @@ else:
         ascending=[False, True]
     )
 
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
-    col1.metric("Spend", f"{total_spend:,.2f} EGP")
-    col2.metric("Leads", f"{total_leads:,}")
-    col3.metric("Avg CPL", f"{avg_cpl:.2f} EGP")
-    col4.metric("Avg CTR", f"{avg_ctr:.2f}%")
-    col5.metric("Avg CPC", f"{avg_cpc:.2f} EGP")
-    col6.metric("Winners", f"{len(winners):,}")
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("Spend", f"{total_spend:,.0f} EGP")
+    k2.metric("Leads", f"{total_leads:,}")
+    k3.metric("Avg CPL", f"{avg_cpl:.2f} EGP")
+    k4.metric("Avg CTR", f"{avg_ctr:.2f}%")
+    k5.metric("Avg CPC", f"{avg_cpc:.2f} EGP")
+    k6.metric("Winners", f"{len(winners):,}")
 
-    st.subheader("🏆 Winner Creative Cards")
+    tab1, tab2, tab3 = st.tabs(["🏆 Winner Creatives", "📊 All Ads", "🧠 Insights"])
 
-    if winners.empty:
-        st.warning("No winner creatives match the selected score.")
-    else:
-        selected_winners = winners.head(max_winners)
+    with tab1:
+        st.subheader("Winner Creative Library")
 
-        rows = [
-            selected_winners.iloc[i:i + 3]
-            for i in range(0, len(selected_winners), 3)
+        selected = winners.head(max_cards)
+
+        if selected.empty:
+            st.warning("No creatives match the selected score.")
+        else:
+            for i in range(0, len(selected), 3):
+                cols = st.columns(3)
+                group = selected.iloc[i:i + 3]
+
+                for col, (_, row) in zip(cols, group.iterrows()):
+                    with col:
+                        render_card(row)
+
+    with tab2:
+        st.subheader("All Ads Performance")
+
+        display_cols = [
+            "Ad ID",
+            "Ad Name",
+            "Creative Type",
+            "Creative Name",
+            "Creative ID",
+            "Video ID",
+            "Spend",
+            "Leads",
+            "CPL",
+            "CTR",
+            "CPC",
+            "CPM",
+            "Reach",
+            "Impressions",
+            "Frequency",
+            "Winner Score",
+            "Status"
         ]
 
-        for row_group in rows:
-            cols = st.columns(3)
-            for col, (_, row) in zip(cols, row_group.iterrows()):
-                with col:
-                    render_creative_card(row)
+        final_df = df[display_cols].sort_values(
+            ["Winner Score", "CPL"],
+            ascending=[False, True]
+        )
 
-    st.subheader("📊 All Ads Performance")
+        st.dataframe(final_df, use_container_width=True)
 
-    display_cols = [
-        "Ad ID",
-        "Ad Name",
-        "Creative Type",
-        "Creative Name",
-        "Creative ID",
-        "Video ID",
-        "Spend",
-        "Leads",
-        "CPL",
-        "CTR",
-        "CPC",
-        "CPM",
-        "Reach",
-        "Impressions",
-        "Frequency",
-        "Winner Score",
-        "Status"
-    ]
+        st.download_button(
+            label="Download CSV",
+            data=final_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="creative_intelligence_dashboard.csv",
+            mime="text/csv"
+        )
 
-    final_df = df[display_cols].sort_values(
-        ["Winner Score", "CPL"],
-        ascending=[False, True]
-    )
+    with tab3:
+        st.subheader("Quick Insights")
 
-    st.dataframe(final_df, use_container_width=True)
+        best = winners.head(1)
 
-    st.download_button(
-        label="Download CSV",
-        data=final_df.to_csv(index=False).encode("utf-8-sig"),
-        file_name="creative_intelligence_dashboard.csv",
-        mime="text/csv"
-    )
+        if not best.empty:
+            best_row = best.iloc[0]
+            st.success(
+                f"Best Creative: {best_row['Ad Name']} | "
+                f"CPL: {best_row['CPL']:.2f} EGP | "
+                f"Leads: {int(best_row['Leads']):,} | "
+                f"Score: {int(best_row['Winner Score'])}/100"
+            )
+
+        st.write("Next step: add Primary Text, Headline, CTA, and AI Hook Analysis.")
